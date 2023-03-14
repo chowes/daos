@@ -1,20 +1,29 @@
 hosts:
   test_servers: 3
   test_clients: 1
-timeout: 950
+timeout: 2000
+setup:
+  start_agents_once: false
+  start_servers_once: false
 server_config:
   name: daos_server
   engines_per_host: 1
-  servers:
+  engines:
     0:
-      targets: 1
+      targets: 4
+      nr_xs_helpers: 0
       log_mask: DEBUG
+      storage:
+        0:
+          class: ram
+          scm_mount: /mnt/daos
+          scm_size: 32
       env_vars:
-        - DD_MASK=mgmt,md,dsms,any
-        - D_LOG_FLUSH=DEBUG
+        # - DD_MASK=mgmt,md,dsms,any
+        - DD_MASK=all
+        - D_LOG_MASK=DEBUG
 pool:
-  control_method: dmg
-  scm_size: 5G
+  size: 10G
   name: daos_server
 container:
   control_method: daos
@@ -26,23 +35,38 @@ dfuse:
   mount_dir: "/tmp/daos_dfuse1/"
   disable_caching: True
 ior:
-  ior_timeout: 180
+  ior_timeout: 180  # TODO increase?
   client_processes:
-    np: 2
+    np: 1
+    # np: 1
   test_file: daos:/testFile
   api: DFS   # POSIX HDF5
-  dfs_oclass: "SX"  # "RP_2GX"
+  dfs_oclass: EC_2P1GX # "SX"  # "RP_2GX"
   transfer_size: '1M'
-  block_size: '128M'
-  iorflags:
-    write_flg: "-w -W -k -G 1 -i 1"
-    read_flg: "-C -k -e -r -R -g -G 1 -Q 1 -vv"
+  block_size: '1024M' # 1 np
+  # block_size: '64M'  # 16 np * 64M = 1024M
+  # block_size: '1M'  # 16 np * 1M = 16M
+  write_flags: "-w -W -k -G 1 -i 1"
+  read_flags: "-C -k -e -r -R -g -G 1 -Q 1 -vv"
 hdf5_vol:
   plugin_path: "/usr/lib64/mpich/lib"
 interop:
-  # Example of upgrade/downgrade RPMs from local tar file
-  # upgrade_rpms: ["/home/dinghwah/RPM/2.1.104/daos-2.1.104-1.el8.x86_64.rpm"]
-  # downgrade_rpms: ["/home/dinghwah/RPM/2.0.3.rc4.signed/daos-2.0.3-5.el8.x86_64.rpm"]
-  # upgrade_repo: "/etc/yum.repos.d/test23-101.repo"
-  downgrade_repo: "/etc/yum.repos.d/test22-1.repo"
-  upgrade_repo: "/etc/yum.repos.d/test23-101.repo"
+  old_version: "2.2.0-4.el8"
+  # new_version: "2.3.108-1.9538.g548b3a05.el8"
+  # new_version: "2.3.108-1.el8"
+  # new_version: "2.3.108-1.9558.g1df119fd.el8"  # PR-12443/3 / DAOS-13683
+  # new_version: "2.3.108-1.9577.ge1a93fb8.el8"  # PR-12443/5 / DAOS-13683
+  # new_version: "2.3.108-3.9610.g5bba9615.el8"  # PR-12556/4
+  # new_version: "2.3.108-1.9602.g53031680.el8"  # PR-12556/5
+  # new_version: "2.3.108-1.9589.g56f4dd73.el8"  # PR-12556/6
+  # new_version: "2.3.108-3.9615.g4fe96bde.el8"  # PR-12556/8
+  # new_version: "2.3.108-3.9619.g4541b5de.el8"  # PR-12556/9
+  # new_version: "2.3.108-3.9622.ga0024ec0.el8"  # PR-12556/10
+  # new_version: "2.3.108-4.9631.g42abb27d.el8"  # PR-12556/12
+  # new_version: "2.3.108-4.9631.gcdf146ae.el8"  # PR-12556/13
+  new_version: "2.3.108-4.9632.g80b4305b.el8"  # PR-12556/14
+
+client:
+  env_vars:
+    - DD_MASK=all
+    - D_LOG_MASK=DEBUG
