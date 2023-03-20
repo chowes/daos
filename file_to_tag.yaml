@@ -1,0 +1,27 @@
+default: pr
+per_path:
+  src/bio/*: pr
+  src/cart/*: pr cart
+  src/client/*: pr
+  src/common/*: pr
+  src/container/*: pr container
+  src/control/*: pr control
+  src/control/security/*: security
+  src/dtx/*: pr dtx
+  src/engine/*: pr
+  src/gurt/*: pr
+  src/include/*: pr
+  src/mgmt/*: pr
+  src/object/*: pr object
+  src/placement/*: pr
+  src/pool/*: pr pool
+  src/proto/*: pr
+  src/rdb/*: pr
+  src/rebuild/*: pr rebuild
+  src/rsvc/*: pr
+  src/security/*: pr security
+  src/tests/*: pr
+  src/utils/*: pr
+  src/vea/*: pr
+  src/vos/*: pr
+  utils/rpms: version
