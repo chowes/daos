@@ -287,13 +287,13 @@ pipeline {
                      defaultValue: true,
                      description: 'Run the Functional Hardware Large test stage')
         string(name: 'CI_UNIT_VM1_LABEL',
-               defaultValue: 'ci_vm1',
+               defaultValue: 'new_vm1',
                description: 'Label to use for 1 VM node unit and RPM tests')
         string(name: 'CI_UNIT_VM1_NVME_LABEL',
-               defaultValue: 'bwx_vm1',
+               defaultValue: 'ci_ssd_vm1',
                description: 'Label to use for 1 VM node unit tests that need NVMe')
         string(name: 'FUNCTIONAL_VM_LABEL',
-               defaultValue: 'ci_vm9',
+               defaultValue: 'new_vm9',
                description: 'Label to use for 9 VM functional tests')
         string(name: 'CI_NLT_1_LABEL',
                defaultValue: 'ci_nlt_1',
