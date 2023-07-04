@@ -55,15 +55,16 @@ static int
 obj_lop_alloc(void *key, unsigned int ksize, void *args,
 	      struct daos_llink **llink_p)
 {
-	struct vos_tls		*tls = vos_tls_get(false);
 	struct vos_object	*obj;
 	struct obj_lru_key	*lkey;
 	struct vos_container	*cont;
+	struct vos_tls		*tls;
 	int			 rc;
 
 	cont = (struct vos_container *)args;
 	D_ASSERT(cont != NULL);
 
+	tls = vos_tls_get(cont->vc_pool->vp_sysdb);
 	lkey = (struct obj_lru_key *)key;
 	D_ASSERT(lkey != NULL);
 
@@ -124,12 +125,13 @@ static void
 obj_lop_free(struct daos_llink *llink)
 {
 	struct vos_object	*obj;
-	struct vos_tls		*tls = vos_tls_get(false);
+	struct vos_tls		*tls;
 
 	D_DEBUG(DB_TRACE, "lru free callback for vos_obj_cache\n");
 
-	d_tm_dec_gauge(tls->vtl_obj_cnt, 1);
 	obj = container_of(llink, struct vos_object, obj_llink);
+	tls = vos_tls_get(obj->obj_cont->vc_pool->vp_sysdb);
+	d_tm_dec_gauge(tls->vtl_obj_cnt, 1);
 	clean_object(obj);
 	D_FREE(obj);
 }
