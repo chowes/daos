@@ -1,5 +1,5 @@
 /**
- * (C) Copyright 2018-2022 Intel Corporation.
+ * (C) Copyright 2018-2023 Intel Corporation.
  *
  * SPDX-License-Identifier: BSD-2-Clause-Patent
  */
@@ -11,6 +11,7 @@
 #include <gurt/heap.h>
 #include <daos/mem.h>
 #include <daos/btree.h>
+#include <daos/common.h>
 #include <daos_srv/vea.h>
 
 #define VEA_MAGIC	(0xea201804)
@@ -27,27 +28,58 @@ struct vea_hint_context {
 };
 
 /* Free extent informat stored in the in-memory compound free extent index */
-struct vea_entry {
+struct vea_extent_entry {
 	/*
 	 * Always keep it as first item, since vfe_blk_off is the direct key
 	 * of DBTREE_CLASS_IV
 	 */
-	struct vea_free_extent   ve_ext;
+	struct vea_free_extent	 vee_ext;
 	/* Link to one of vsc_lru or vsi_agg_lru */
-	d_list_t		 ve_link;
+	d_list_t		 vee_link;
 	/* Back reference to sized tree entry */
-	struct vea_sized_class	*ve_sized_class;
+	struct vea_sized_class	*vee_sized_class;
 	/* Link to vfc_heap */
-	struct d_binheap_node	 ve_node;
+	struct d_binheap_node	 vee_node;
 };
 
-#define VEA_LARGE_EXT_MB	64	/* Large extent threshold in MB */
+/* Bitmap entry */
+struct vea_bitmap_entry {
+	/*
+	 * Always keep it as first item, since vfb_blk_off is the direct key
+	 * of DBTREE_CLASS_IV
+	 */
+	struct vea_free_bitmap	 vbe_bitmap;
+	/* Link to one of vsc_lru or vsi_agg_lru */
+	d_list_t		 vbe_link;
+	/* Back reference to sized tree entry */
+	struct vea_sized_class	*vbe_sized_class;
+	/* if this bitmap newly allocated */
+	bool			 vbe_is_new;
+};
+
+enum {
+	VEA_FREE_ENTRY_EXTENT,
+	VEA_FREE_ENTRY_BITMAP,
+	VEA_FREE_ENTRY_INVALID,
+};
+
+/* freed entry stored in aggregation tree */
+struct vea_free_entry {
+	struct vea_free_extent	vfe_ext;
+	/* Link to one vsi_agg_lru */
+	d_list_t		vfe_link;
+	uint32_t		vfe_type;
+};
+
+#define VEA_LARGE_EXT_MB	1	/* Large extent threshold in MB */
 #define VEA_HINT_OFF_INVAL	0	/* Invalid hint offset */
 
 /* Value entry of sized free extent tree (vfc_size_btr) */
 struct vea_sized_class {
 	/* Small extents LRU list */
-	d_list_t		vsc_lru;
+	d_list_t		vsc_extent_lru;
+	/* Bitmap LRU list */
+	d_list_t		vsc_bitmap_lru;
 };
 
 /*
@@ -57,7 +89,7 @@ struct vea_sized_class {
 struct vea_free_class {
 	/* Max heap for tracking the largest free extent */
 	struct d_binheap	vfc_heap;
-	/* Small free extent tree */
+	/* Small free extent or bitmap blocks tree */
 	daos_handle_t		vfc_size_btr;
 	/* Size threshold for large extent */
 	uint32_t		vfc_large_thresh;
@@ -91,6 +123,8 @@ struct vea_metrics {
 	struct d_tm_node_t	*vm_free_blks;
 };
 
+#define MAX_FLUSH_FRAGS	256
+
 /* In-memory compound index */
 struct vea_space_info {
 	/* Instance for the pmemobj pool on SCM */
@@ -107,18 +141,22 @@ struct vea_space_info {
 	/* Open handles for the persistent free extent tree */
 	daos_handle_t			 vsi_md_free_btr;
 	/* Open handles for the persistent extent vector tree */
-	daos_handle_t			 vsi_md_vec_btr;
+	daos_handle_t                    vsi_md_vec_btr;
+	/* Open handles for the persistent bitmap tree */
+	daos_handle_t			 vsi_md_bitmap_btr;
 	/* Free extent tree sorted by offset, for all free extents. */
 	daos_handle_t			 vsi_free_btr;
 	/* Extent vector tree, for non-contiguous allocation */
 	daos_handle_t			 vsi_vec_btr;
+	/* Bitmap tree, for small allocation */
+	daos_handle_t			 vsi_bitmap_btr;
 	/* Index for searching free extent by size & age */
 	struct vea_free_class		 vsi_class;
-	/* LRU to aggergate just recent freed extents */
+	/* LRU to aggergate just recent freed extents or bitmap blocks */
 	d_list_t			 vsi_agg_lru;
 	/*
-	 * Free extent tree sorted by offset, for coalescing the just recent
-	 * free extents.
+	 * Free entries sorted by offset, for coalescing the just recent
+	 * free extents or bitmap blocks.
 	 */
 	daos_handle_t			 vsi_agg_btr;
 	/* Unmap context to perform unmap against freed extent */
@@ -130,6 +168,8 @@ struct vea_space_info {
 	/* Last aging buffer flush timestamp */
 	uint32_t			 vsi_flush_time;
 	bool				 vsi_flush_scheduled;
+	/* tmp buffer to store flush type */
+	uint8_t				 vsi_flush_type[MAX_FLUSH_FRAGS];
 };
 
 static inline uint32_t
@@ -155,11 +195,12 @@ int load_space_info(struct vea_space_info *vsi);
 /* vea_util.c */
 int verify_free_entry(uint64_t *off, struct vea_free_extent *vfe);
 int verify_vec_entry(uint64_t *off, struct vea_ext_vector *vec);
+int verify_bitmap_entry(uint64_t *off, struct vea_free_bitmap *vfb);
 int ext_adjacent(struct vea_free_extent *cur, struct vea_free_extent *next);
 int verify_resrvd_ext(struct vea_resrvd_ext *resrvd);
 int vea_dump(struct vea_space_info *vsi, bool transient);
 int vea_verify_alloc(struct vea_space_info *vsi, bool transient,
-		     uint64_t off, uint32_t cnt);
+		     uint64_t off, uint32_t cnt, bool is_bitmap);
 void dec_stats(struct vea_space_info *vsi, unsigned int type, uint64_t nr);
 void inc_stats(struct vea_space_info *vsi, unsigned int type, uint64_t nr);
 
@@ -171,19 +212,25 @@ int reserve_single(struct vea_space_info *vsi, uint32_t blk_cnt,
 		   struct vea_resrvd_ext *resrvd);
 int reserve_vector(struct vea_space_info *vsi, uint32_t blk_cnt,
 		   struct vea_resrvd_ext *resrvd);
-int persistent_alloc(struct vea_space_info *vsi, struct vea_free_extent *vfe);
+int persistent_alloc(struct vea_space_info *vsi, struct vea_free_entry *vfe, void *private);
 
 /* vea_free.c */
-#define MAX_FLUSH_FRAGS	256
-void free_class_remove(struct vea_space_info *vsi, struct vea_entry *entry);
-int free_class_add(struct vea_space_info *vsi, struct vea_entry *entry);
-int compound_free(struct vea_space_info *vsi, struct vea_free_extent *vfe,
-		  unsigned int flags);
-int persistent_free(struct vea_space_info *vsi, struct vea_free_extent *vfe);
-int aggregated_free(struct vea_space_info *vsi, struct vea_free_extent *vfe);
+void extent_free_class_remove(struct vea_space_info *vsi, struct vea_extent_entry *entry);
+int extent_free_class_add(struct vea_space_info *vsi, struct vea_extent_entry *entry);
+void bitmap_free_class_remove(struct vea_space_info *vsi, struct vea_bitmap_entry *entry);
+int bitmap_free_class_add(struct vea_space_info *vsi, struct vea_bitmap_entry *entry);
+int compound_free_extent(struct vea_space_info *vsi, struct vea_free_extent *vfe,
+			 unsigned int flags);
+int compound_free(struct vea_space_info *vsi, struct vea_free_entry *vfe, unsigned int flags);
+int persistent_free(struct vea_space_info *vsi, struct vea_free_entry *vfe);
+int aggregated_free(struct vea_space_info *vsi, struct vea_free_entry *vfe);
 int trigger_aging_flush(struct vea_space_info *vsi, bool force,
 			uint32_t nr_flush, uint32_t *nr_flushed);
 int schedule_aging_flush(struct vea_space_info *vsi);
+int bitmap_entry_insert(struct vea_space_info *vsi, struct vea_free_bitmap *vfb,
+			bool is_new, struct vea_bitmap_entry **ret_entry);
+int free_type(struct vea_space_info *vsi, uint64_t blk_off, uint32_t blk_cnt,
+	      bool transient);
 
 /* vea_hint.c */
 void hint_get(struct vea_hint_context *hint, uint64_t *off);

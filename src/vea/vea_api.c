@@ -1,5 +1,5 @@
 /**
- * (C) Copyright 2018-2022 Intel Corporation.
+ * (C) Copyright 2018-2023 Intel Corporation.
  *
  * SPDX-License-Identifier: BSD-2-Clause-Patent
  */
@@ -14,7 +14,7 @@ static void
 erase_md(struct umem_instance *umem, struct vea_space_df *md)
 {
 	struct umem_attr uma = {0};
-	daos_handle_t free_btr, vec_btr;
+	daos_handle_t free_btr, bitmap_btr;
 	int rc;
 
 	uma.uma_id = umem->umm_id;
@@ -27,11 +27,11 @@ erase_md(struct umem_instance *umem, struct vea_space_df *md)
 				DP_RC(rc));
 	}
 
-	rc = dbtree_open_inplace(&md->vsd_vec_tree, &uma, &vec_btr);
+	rc = dbtree_open_inplace(&md->vsd_bitmap_tree, &uma, &bitmap_btr);
 	if (rc == 0) {
-		rc = dbtree_destroy(vec_btr, NULL);
+		rc = dbtree_destroy(bitmap_btr, NULL);
 		if (rc)
-			D_ERROR("destroy vector tree error: "DF_RC"\n",
+			D_ERROR("destroy bitmap tree error: "DF_RC"\n",
 				DP_RC(rc));
 	}
 }
@@ -49,7 +49,7 @@ vea_format(struct umem_instance *umem, struct umem_tx_stage_data *txd,
 	struct vea_free_extent free_ext;
 	struct umem_attr uma;
 	uint64_t tot_blks;
-	daos_handle_t free_btr, vec_btr;
+	daos_handle_t free_btr, bitmap_btr;
 	d_iov_t key, val;
 	int rc;
 
@@ -108,7 +108,7 @@ vea_format(struct umem_instance *umem, struct umem_tx_stage_data *txd,
 	if (rc != 0)
 		return rc;
 
-	free_btr = vec_btr = DAOS_HDL_INVAL;
+	free_btr = bitmap_btr = DAOS_HDL_INVAL;
 
 	rc = umem_tx_add_ptr(umem, md, sizeof(*md));
 	if (rc != 0)
@@ -141,17 +141,17 @@ vea_format(struct umem_instance *umem, struct umem_tx_stage_data *txd,
 	if (rc != 0)
 		goto out;
 
-	/* Create extent vector tree */
+	/* Create bitmap tree */
 	rc = dbtree_create_inplace(DBTREE_CLASS_IFV, BTR_FEAT_DIRECT_KEY, VEA_TREE_ODR, &uma,
-				   &md->vsd_vec_tree, &vec_btr);
+				   &md->vsd_bitmap_tree, &bitmap_btr);
 	if (rc != 0)
 		goto out;
 
 out:
 	if (daos_handle_is_valid(free_btr))
 		dbtree_close(free_btr);
-	if (daos_handle_is_valid(vec_btr))
-		dbtree_close(vec_btr);
+	if (daos_handle_is_valid(bitmap_btr))
+		dbtree_close(bitmap_btr);
 
 	/* Commit/Abort transaction on success/error */
 	return rc ? umem_tx_abort(umem, rc) : umem_tx_commit(umem);
@@ -174,6 +174,12 @@ vea_unload(struct vea_space_info *vsi)
 	if (daos_handle_is_valid(vsi->vsi_vec_btr)) {
 		dbtree_destroy(vsi->vsi_vec_btr, NULL);
 		vsi->vsi_vec_btr = DAOS_HDL_INVAL;
+	}
+
+	/* Destroy the in-memory bitmap tree */
+	if (daos_handle_is_valid(vsi->vsi_bitmap_btr)) {
+		dbtree_destroy(vsi->vsi_bitmap_btr, NULL);
+		vsi->vsi_bitmap_btr = DAOS_HDL_INVAL;
 	}
 
 	/* Destroy the in-memory aggregation tree */
@@ -219,7 +225,9 @@ vea_load(struct umem_instance *umem, struct umem_tx_stage_data *txd,
 	vsi->vsi_md = md;
 	vsi->vsi_md_free_btr = DAOS_HDL_INVAL;
 	vsi->vsi_md_vec_btr = DAOS_HDL_INVAL;
+	vsi->vsi_md_bitmap_btr = DAOS_HDL_INVAL;
 	vsi->vsi_free_btr = DAOS_HDL_INVAL;
+	vsi->vsi_bitmap_btr = DAOS_HDL_INVAL;
 	D_INIT_LIST_HEAD(&vsi->vsi_agg_lru);
 	vsi->vsi_agg_btr = DAOS_HDL_INVAL;
 	vsi->vsi_vec_btr = DAOS_HDL_INVAL;
@@ -249,6 +257,12 @@ vea_load(struct umem_instance *umem, struct umem_tx_stage_data *txd,
 	/* Create in-memory aggregation tree */
 	rc = dbtree_create(DBTREE_CLASS_IFV, BTR_FEAT_DIRECT_KEY, VEA_TREE_ODR, &uma, NULL,
 			   &vsi->vsi_agg_btr);
+	if (rc != 0)
+		goto error;
+
+	/* Create in-memory bitmap tree */
+	rc = dbtree_create(DBTREE_CLASS_IFV, BTR_FEAT_DIRECT_KEY, VEA_TREE_ODR, &uma, NULL,
+			   &vsi->vsi_bitmap_btr);
 	if (rc != 0)
 		goto error;
 
@@ -355,23 +369,38 @@ error:
 	return rc;
 }
 
+static bool
+is_resrvd_new_bitmap(struct vea_resrvd_ext *resrvd)
+{
+	struct vea_bitmap_entry	*bitmap_entry;
+
+	bitmap_entry = (struct vea_bitmap_entry *)resrvd->vre_private;
+	if (!bitmap_entry)
+		return false;
+
+	return bitmap_entry->vbe_is_new;
+}
+
 static int
 process_resrvd_list(struct vea_space_info *vsi, struct vea_hint_context *hint,
 		    d_list_t *resrvd_list, bool publish)
 {
 	struct vea_resrvd_ext	*resrvd, *tmp;
-	struct vea_free_extent	 vfe;
+	struct vea_free_entry	 vfe;
 	uint64_t		 seq_max = 0, seq_min = 0;
 	uint64_t		 off_c = 0, off_p = 0;
 	unsigned int		 seq_cnt = 0;
 	int			 rc = 0;
+	uint32_t		 entry_type;
+	void			*private = NULL;
 
 	if (d_list_empty(resrvd_list))
 		return 0;
 
-	vfe.vfe_blk_off = 0;
-	vfe.vfe_blk_cnt = 0;
-	vfe.vfe_age = 0;	/* Not used */
+	vfe.vfe_ext.vfe_blk_off = 0;
+	vfe.vfe_ext.vfe_blk_cnt = 0;
+	vfe.vfe_ext.vfe_age = 0;	/* Not used */
+	vfe.vfe_type = VEA_FREE_ENTRY_INVALID;
 
 	d_list_for_each_entry(resrvd, resrvd_list, vre_link) {
 		rc = verify_resrvd_ext(resrvd);
@@ -389,25 +418,31 @@ process_resrvd_list(struct vea_space_info *vsi, struct vea_hint_context *hint,
 		seq_cnt++;
 		seq_max = resrvd->vre_hint_seq;
 		off_p = resrvd->vre_blk_off + resrvd->vre_blk_cnt;
+		entry_type = resrvd->vre_private ?
+				VEA_FREE_ENTRY_BITMAP : VEA_FREE_ENTRY_EXTENT;
 
-		if (vfe.vfe_blk_off + vfe.vfe_blk_cnt == resrvd->vre_blk_off) {
-			vfe.vfe_blk_cnt += resrvd->vre_blk_cnt;
+		if (vfe.vfe_type == entry_type && private == resrvd->vre_private &&
+		    !is_resrvd_new_bitmap(resrvd) &&
+		    vfe.vfe_ext.vfe_blk_off + vfe.vfe_ext.vfe_blk_cnt == resrvd->vre_blk_off) {
+			vfe.vfe_ext.vfe_blk_cnt += resrvd->vre_blk_cnt;
 			continue;
 		}
 
-		if (vfe.vfe_blk_cnt != 0) {
-			rc = publish ? persistent_alloc(vsi, &vfe) :
+		if (vfe.vfe_ext.vfe_blk_cnt != 0) {
+			rc = publish ? persistent_alloc(vsi, &vfe, private) :
 				       compound_free(vsi, &vfe, 0);
 			if (rc)
 				goto error;
 		}
 
-		vfe.vfe_blk_off = resrvd->vre_blk_off;
-		vfe.vfe_blk_cnt = resrvd->vre_blk_cnt;
+		vfe.vfe_ext.vfe_blk_off = resrvd->vre_blk_off;
+		vfe.vfe_ext.vfe_blk_cnt = resrvd->vre_blk_cnt;
+		vfe.vfe_type = entry_type;
+		private = resrvd->vre_private;
 	}
 
-	if (vfe.vfe_blk_cnt != 0) {
-		rc = publish ? persistent_alloc(vsi, &vfe) :
+	if (vfe.vfe_ext.vfe_blk_cnt != 0) {
+		rc = publish ? persistent_alloc(vsi, &vfe, private) :
 			       compound_free(vsi, &vfe, 0);
 		if (rc)
 			goto error;
@@ -459,7 +494,7 @@ vea_tx_publish(struct vea_space_info *vsi, struct vea_hint_context *hint,
 
 struct free_commit_cb_arg {
 	struct vea_space_info	*fca_vsi;
-	struct vea_free_extent	 fca_vfe;
+	struct vea_free_entry	 fca_vfe;
 };
 
 static void
@@ -509,16 +544,22 @@ vea_free(struct vea_space_info *vsi, uint64_t blk_off, uint32_t blk_cnt)
 	struct umem_instance *umem = vsi->vsi_umem;
 	struct free_commit_cb_arg *fca;
 	int rc;
+	int type;
+
+	type = free_type(vsi, blk_off, blk_cnt, false);
+	if (type < 0)
+		return type;
 
 	D_ALLOC_PTR(fca);
 	if (fca == NULL)
 		return -DER_NOMEM;
 
 	fca->fca_vsi = vsi;
-	fca->fca_vfe.vfe_blk_off = blk_off;
-	fca->fca_vfe.vfe_blk_cnt = blk_cnt;
+	fca->fca_vfe.vfe_ext.vfe_blk_off = blk_off;
+	fca->fca_vfe.vfe_ext.vfe_blk_cnt = blk_cnt;
+	fca->fca_vfe.vfe_type = type;
 
-	rc = verify_free_entry(NULL, &fca->fca_vfe);
+	rc = verify_free_entry(NULL, &fca->fca_vfe.vfe_ext);
 	if (rc)
 		goto error;
 
@@ -633,12 +674,13 @@ static int
 count_free_transient(daos_handle_t ih, d_iov_t *key, d_iov_t *val,
 		     void *arg)
 {
-	struct vea_entry	*ve;
+	struct vea_extent_entry *ve;
 	uint64_t		*free_blks = arg;
 
-	ve = (struct vea_entry *)val->iov_buf;
+	ve = (struct vea_extent_entry *)val->iov_buf;
 	D_ASSERT(free_blks != NULL);
-	*free_blks += ve->ve_ext.vfe_blk_cnt;
+	*free_blks += ve->vee_ext.vfe_blk_cnt;
+	/* count free blocks from bitmap */
 
 	return 0;
 }
@@ -679,6 +721,7 @@ vea_query(struct vea_space_info *vsi, struct vea_attr *attr,
 				    (void *)&stat->vs_free_transient);
 		if (rc != 0)
 			return rc;
+		/* count bitmap */
 
 		stat->vs_resrv_hint = vsi->vsi_stat[STAT_RESRV_HINT];
 		stat->vs_resrv_large = vsi->vsi_stat[STAT_RESRV_LARGE];

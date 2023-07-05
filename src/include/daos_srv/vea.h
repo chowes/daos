@@ -1,5 +1,5 @@
 /**
- * (C) Copyright 2018-2022 Intel Corporation.
+ * (C) Copyright 2018-2023 Intel Corporation.
  *
  * SPDX-License-Identifier: BSD-2-Clause-Patent
  */
@@ -27,6 +27,24 @@ struct vea_free_extent {
 	uint32_t	vfe_age;	/* Monotonic timestamp */
 };
 
+/* Bitmap chunk size */
+#define	VEA_BITMAP_CHUNK_BLKS	4096
+#define VEA_BITMAP_SZ		(VEA_BITMAP_CHUNK_BLKS / 64)
+
+/* Min bitmap allocation class */
+#define VEA_BITMAP_CLASS_MIN	1
+/* Max bitmap allocation class */
+#define VEA_BITMAP_CLASS_MAX	256
+
+/* Common free bitmap structure for both SCM & in-memory index */
+struct vea_free_bitmap {
+	uint64_t	vfb_blk_off;				/* Block offset of the bitmap */
+	uint16_t	vfb_class;				/* Allocation class of bitmap */
+	uint16_t	vfb_reserved;				/* Padding */
+	uint32_t	vfb_age;				/* Monotonic timestamp */
+	uint64_t	vfb_bitmaps[VEA_BITMAP_SZ];	/* Bitmaps of this chunk */
+};
+
 /* Maximum extents a non-contiguous allocation can have */
 #define VEA_EXT_VECTOR_MAX	9
 
@@ -49,8 +67,12 @@ struct vea_resrvd_ext {
 	uint64_t		 vre_hint_seq;
 	/* Total reserved blocks */
 	uint32_t		 vre_blk_cnt;
+	/* New extent allocated for bitmap */
+	uint32_t		 vre_new_bitmap_chunk:1;
 	/* Extent vector for non-contiguous reserve */
 	struct vea_ext_vector	*vre_vector;
+	/* private pointer */
+	void			*vre_private;
 };
 
 /*
@@ -95,8 +117,10 @@ struct vea_space_df {
 	uint64_t	vsd_tot_blks;
 	/* Free extent tree, sorted by offset */
 	struct btr_root	vsd_free_tree;
+	/* Free bitmap tree, sorted by offset */
+	struct btr_root vsd_bitmap_tree;
 	/* Allocated extent vector tree, for non-contiguous allocation */
-	struct btr_root	vsd_vec_tree;
+	//struct btr_root	vsd_vec_tree;
 };
 
 /* VEA attributes */

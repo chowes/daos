@@ -1,5 +1,5 @@
 /**
- * (C) Copyright 2018-2022 Intel Corporation.
+ * (C) Copyright 2018-2023 Intel Corporation.
  *
  * SPDX-License-Identifier: BSD-2-Clause-Patent
  */
@@ -25,13 +25,13 @@ destroy_free_class(struct vea_free_class *vfc)
 static bool
 heap_node_cmp(struct d_binheap_node *a, struct d_binheap_node *b)
 {
-	struct vea_entry *nodea, *nodeb;
+	struct vea_extent_entry *nodea, *nodeb;
 
-	nodea = container_of(a, struct vea_entry, ve_node);
-	nodeb = container_of(b, struct vea_entry, ve_node);
+	nodea = container_of(a, struct vea_extent_entry, vee_node);
+	nodeb = container_of(b, struct vea_extent_entry, vee_node);
 
 	/* Max heap, the largest free extent is heap root */
-	return nodea->ve_ext.vfe_blk_cnt > nodeb->ve_ext.vfe_blk_cnt;
+	return nodea->vee_ext.vfe_blk_cnt > nodeb->vee_ext.vfe_blk_cnt;
 }
 
 static struct d_binheap_ops heap_ops = {
@@ -78,6 +78,11 @@ unload_space_info(struct vea_space_info *vsi)
 		dbtree_close(vsi->vsi_md_vec_btr);
 		vsi->vsi_md_vec_btr = DAOS_HDL_INVAL;
 	}
+
+	if (daos_handle_is_valid(vsi->vsi_md_bitmap_btr)) {
+		dbtree_close(vsi->vsi_md_bitmap_btr);
+		vsi->vsi_md_bitmap_btr = DAOS_HDL_INVAL;
+	}
 }
 
 static int
@@ -96,13 +101,14 @@ load_free_entry(daos_handle_t ih, d_iov_t *key, d_iov_t *val, void *arg)
 	if (rc != 0)
 		return rc;
 
-	rc = compound_free(vsi, vfe, VEA_FL_NO_MERGE);
+	rc = compound_free_extent(vsi, vfe, VEA_FL_NO_MERGE);
 	if (rc != 0)
 		return rc;
 
 	return 0;
 }
 
+/*
 static int
 load_vec_entry(daos_handle_t ih, d_iov_t *key, d_iov_t *val, void *arg)
 {
@@ -120,6 +126,28 @@ load_vec_entry(daos_handle_t ih, d_iov_t *key, d_iov_t *val, void *arg)
 		return rc;
 
 	return compound_vec_alloc(vsi, vec);
+}
+*/
+
+static int
+load_bitmap_entry(daos_handle_t ih, d_iov_t *key, d_iov_t *val, void *arg)
+{
+	struct vea_free_bitmap *vfb;
+	struct vea_space_info *vsi;
+	uint64_t *off;
+	int rc;
+
+	vsi = (struct vea_space_info *)arg;
+	off = (uint64_t *)key->iov_buf;
+	vfb = (struct vea_free_bitmap *)val->iov_buf;
+
+	rc = verify_bitmap_entry(off, vfb);
+	if (rc != 0)
+		return rc;
+
+	rc = bitmap_entry_insert(vsi, vfb, false, NULL);
+
+	return rc;
 }
 
 int
@@ -142,9 +170,16 @@ load_space_info(struct vea_space_info *vsi)
 		goto error;
 
 	/* Open SCM extent vector tree */
+	/*
 	D_ASSERT(daos_handle_is_inval(vsi->vsi_md_vec_btr));
 	rc = dbtree_open_inplace(&vsi->vsi_md->vsd_vec_tree, &uma,
 				 &vsi->vsi_md_vec_btr);
+	if (rc != 0)
+		goto error;
+	*/
+	/* Open SCM bitmap tree */
+	rc = dbtree_open_inplace(&vsi->vsi_md->vsd_bitmap_tree, &uma,
+				 &vsi->vsi_md_bitmap_btr);
 	if (rc != 0)
 		goto error;
 
@@ -155,8 +190,16 @@ load_space_info(struct vea_space_info *vsi)
 		goto error;
 
 	/* Build up in-memory extent vector tree */
+	/*
 	rc = dbtree_iterate(vsi->vsi_md_vec_btr, DAOS_INTENT_DEFAULT, false,
 			    load_vec_entry, (void *)vsi);
+	if (rc != 0)
+		goto error;
+	*/
+
+	/* Build up in-memory bitmap tree */
+	rc = dbtree_iterate(vsi->vsi_md_bitmap_btr, DAOS_INTENT_DEFAULT, false,
+			    load_bitmap_entry, (void *)vsi);
 	if (rc != 0)
 		goto error;
 
