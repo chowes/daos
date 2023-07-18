@@ -50,7 +50,7 @@ class PoolCreateAllHwTests(PoolCreateAllTestBase):
             bytes_to_human(nvme_bytes),
             nvme_bytes)
 
-    def test_one_pool(self):
+    def test_one_pool_hw(self):
         """Test the creation of one pool with all the storage capacity.
 
         Test Description:
@@ -60,7 +60,7 @@ class PoolCreateAllHwTests(PoolCreateAllTestBase):
         :avocado: tags=all,daily_regression
         :avocado: tags=hw,medium
         :avocado: tags=pool,pool_create_all
-        :avocado: tags=PoolCreateAllHwTests,test_one_pool
+        :avocado: tags=PoolCreateAllHwTests,test_one_pool_hw
         """
         deltas_bytes = self.get_deltas("test_one_pool")
         self.log.info("Test basic pool creation with full storage")
@@ -68,7 +68,7 @@ class PoolCreateAllHwTests(PoolCreateAllTestBase):
 
         self.check_pool_full_storage(*deltas_bytes)
 
-    def test_recycle_pools(self):
+    def test_recycle_pools_hw(self):
         """Test the pool creation and destruction.
 
         Test Description:
@@ -79,7 +79,7 @@ class PoolCreateAllHwTests(PoolCreateAllTestBase):
         :avocado: tags=all,daily_regression
         :avocado: tags=hw,medium
         :avocado: tags=pool,pool_create_all
-        :avocado: tags=PoolCreateAllHwTests,test_recycle_pools
+        :avocado: tags=PoolCreateAllHwTests,test_recycle_pools_hw
         """
         pool_count = self.params.get("pool_count", "/run/test_recycle_pools/*", 0)
         deltas_bytes = self.get_deltas("test_recycle_pools")
@@ -90,7 +90,7 @@ class PoolCreateAllHwTests(PoolCreateAllTestBase):
 
         self.check_pool_recycling(pool_count, *deltas_bytes)
 
-    def test_two_pools(self):
+    def test_two_pools_hw(self):
         """Test the creation of two pools with 50% and 100% of the available storage.
 
         Test Description:
@@ -103,7 +103,7 @@ class PoolCreateAllHwTests(PoolCreateAllTestBase):
         :avocado: tags=all,daily_regression
         :avocado: tags=hw,medium
         :avocado: tags=pool,pool_create_all
-        :avocado: tags=PoolCreateAllHwTests,test_two_pools
+        :avocado: tags=PoolCreateAllHwTests,test_two_pools_hw
         """
         pool_half_deltas_bytes = self.get_deltas("test_two_pools", "pool_half")
         pool_full_deltas_bytes = self.get_deltas("test_two_pools", "pool_full")
