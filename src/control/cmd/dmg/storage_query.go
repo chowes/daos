@@ -71,7 +71,7 @@ type storageQueryCmd struct {
 
 type devHealthQueryCmd struct {
 	smdQueryCmd
-	UUID string `short:"u" long:"uuid" required:"1" description:"Device UUID"`
+	UUID string `short:"u" long:"uuid" description:"Device UUID"`
 }
 
 func (cmd *devHealthQueryCmd) Execute(_ []string) error {
